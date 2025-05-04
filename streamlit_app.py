@@ -1,56 +1,79 @@
 import streamlit as st
 from openai import OpenAI
+import PyPDF2, io
 
-# Show title and description.
-st.title("💬 Chatbot")
+# ── Page header ────────────────────────────────────────────────────────────────
+st.title('💬 PDF‑aware Chatbot')
 st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
+    'Ask anything about an uploaded PDF.  \n'
+    'You need an OpenAI API key – get one '
+    '[here](https://platform.openai.com/account/api-keys).'
 )
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
+# ── API key ────────────────────────────────────────────────────────────────────
+openai_api_key = st.text_input('OpenAI API Key', type='password')
 if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+    st.info('Please add your OpenAI API key to continue.', icon='🗝️')
+    st.stop()
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+client = OpenAI(api_key=openai_api_key)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# ── PDF upload & caching ───────────────────────────────────────────────────────
+pdf_file = st.file_uploader('📄 Upload a PDF to chat about', type='pdf')
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+if pdf_file and 'doc_text' not in st.session_state:
+    reader = PyPDF2.PdfReader(io.BytesIO(pdf_file.read()))
+    pages   = [p.extract_text() or '' for p in reader.pages]
+    fulltext = '\n'.join(pages)
+    st.session_state.doc_text = fulltext
+    st.success(f'Loaded {len(pages)} page(s).')
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+if 'doc_text' in st.session_state:
+    with st.expander('Preview extracted text', expanded=False):
+        st.write(st.session_state.doc_text[:2000] + '…')
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+# ── Chat history ───────────────────────────────────────────────────────────────
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+for m in st.session_state.messages:
+    with st.chat_message(m['role']):
+        st.markdown(m['content'])
+
+# ── User input ────────────────────────────────────────────────────────────────
+prompt = st.chat_input('Ask a question about the PDF…')
+if not prompt:
+    st.stop()
+
+st.session_state.messages.append({'role': 'user', 'content': prompt})
+with st.chat_message('user'):
+    st.markdown(prompt)
+
+# ── Build context for the model ───────────────────────────────────────────────
+context = []
+if 'doc_text' in st.session_state:
+    doc_excerpt = st.session_state.doc_text[:12000]          # keep token usage reasonable
+    context.append({
+        'role': 'system',
+        'content': (
+            'You are a helpful assistant.  '
+            'Answer the user strictly using the information in this document:\n' +
+            doc_excerpt
         )
+    })
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+context.extend(
+    {'role': m['role'], 'content': m['content']}
+    for m in st.session_state.messages
+)
+
+# ── Model call with streaming ─────────────────────────────────────────────────
+with st.chat_message('assistant'):
+    stream = client.chat.completions.create(
+        model='gpt-3.5-turbo',
+        messages=context,
+        stream=True,
+    )
+    reply = st.write_stream(stream)
+
+st.session_state.messages.append({'role': 'assistant', 'content': reply})
