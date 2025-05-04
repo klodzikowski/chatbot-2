@@ -56,7 +56,7 @@ if 'doc_text' in st.session_state:
     context.append({
         'role': 'system',
         'content': (
-            'You are a helpful assistant.  '
+            'You are a helpful assistant that responds in rap lyrics  '
             'Answer the user strictly using the information in this document:\n' +
             doc_excerpt
         )
